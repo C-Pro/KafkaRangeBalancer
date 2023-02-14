@@ -13,15 +13,18 @@ To achieve this we use Hash message->partition mapper in the producer and RangeG
 
 ## Run it
 
-For some reason with provided docker-compose for kafka I got this error:
+### Kafka
+
+The cluster and  topics setup are hardcoded in docker-compose. To run it you need first to change advertized listener IPs to your network interface IP address (localhost won't work).
 
 ```
-2023/02/13 17:12:46 failed to produce: [3] Unknown Topic Or Partition: the request is for a topic or partition that does not exist on this broker
+$ docker-compose up -d
+$ go run main.go -brokers 127.0.0.1:9093,127.0.0.1:9094,127.0.0.1:9095
+2023/02/14 12:34:59 Producing finished in 19.454449084s
+2023/02/14 12:35:14 ok
 ```
 
-I suspect topics were not created properly despite magic `KAFKA_CREATE_TOPICS="topic1:3:1,topic2:3:1"` env variable. When something does not work in Kafka I just try to do the same in Redpanda.
-
-With Redpanda it works out of the box:
+With Redpanda you can easily create cluster and topics with couple of `rpk` commands.
 
 ```
 $ rpk container start -n 3
@@ -31,22 +34,17 @@ Waiting for the cluster to be ready...
   0        127.0.0.1:58667
   1        127.0.0.1:58661
   2        127.0.0.1:58662
+  ...
 
-Cluster started! You may use rpk to interact with it. E.g:
-
-  rpk cluster info --brokers 127.0.0.1:58667,127.0.0.1:58661,127.0.0.1:58662
-
-You may also set an environment variable with the comma-separated list of broker addresses:
-
-  export REDPANDA_BROKERS="127.0.0.1:58667,127.0.0.1:58661,127.0.0.1:58662"
-  rpk cluster info
-$ REDPANDA_BROKERS="127.0.0.1:58667,127.0.0.1:58661,127.0.0.1:58662"
+$ export REDPANDA_BROKERS="127.0.0.1:58667,127.0.0.1:58661,127.0.0.1:58662"
 $ rpk topic create topic1 -p 3 -r 1
 TOPIC   STATUS
 topic1  OK
+
 $ rpk topic create topic2 -p 3 -r 1
 TOPIC   STATUS
 topic2  OK
+
 $ go run main.go -brokers 127.0.0.1:58667,127.0.0.1:58661,127.0.0.1:58662
 2023/02/13 17:35:50 Producing finished in 19.267179125s
 2023/02/13 17:35:55 ok

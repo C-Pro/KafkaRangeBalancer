@@ -49,7 +49,6 @@ func NewConsumer(url, topics string) *Consumer {
 			GroupID:        "999",
 			GroupTopics:    strings.Split(topics, ","),
 			StartOffset:    kafka.LastOffset,
-			GroupBalancers: []kafka.GroupBalancer{&kafka.RangeGroupBalancer{}},
 		}),
 	}
 }
@@ -182,7 +181,7 @@ func main() {
 
 	wg.Wait()
 	log.Printf("Producing finished in %v", time.Since(start))
-	time.Sleep(time.Second * 5) // wait for messages still in flight
+	time.Sleep(time.Second * 15) // wait for messages still in flight
 	cancel()
 
 	sumT1 := 0
