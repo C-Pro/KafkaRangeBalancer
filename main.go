@@ -19,6 +19,7 @@ type Message struct {
 	Topic     string
 	Key       string
 	Value     string
+	Partition int
 	Timestamp time.Time
 }
 
@@ -45,10 +46,10 @@ func NewProducer(url string) *Producer {
 func NewConsumer(url, topics string) *Consumer {
 	return &Consumer{
 		reader: kafka.NewReader(kafka.ReaderConfig{
-			Brokers:        strings.Split(url, ","),
-			GroupID:        "999",
-			GroupTopics:    strings.Split(topics, ","),
-			StartOffset:    kafka.LastOffset,
+			Brokers:     strings.Split(url, ","),
+			GroupID:     "999",
+			GroupTopics: strings.Split(topics, ","),
+			StartOffset: kafka.LastOffset,
 		}),
 	}
 }
@@ -61,6 +62,10 @@ func (p *Producer) Produce(ctx context.Context, topic, key, value string) error 
 	}
 
 	return p.writer.WriteMessages(ctx, msg)
+}
+
+func (c *Consumer) Close() error {
+	return c.reader.Close()
 }
 
 func (c *Consumer) Consume(ctx context.Context) (chan Message, error) {
@@ -88,6 +93,7 @@ func (c *Consumer) Consume(ctx context.Context) (chan Message, error) {
 				Topic:     m.Topic,
 				Key:       string(m.Key),
 				Value:     string(m.Value),
+				Partition: m.Partition,
 				Timestamp: m.Time,
 			}:
 			}
@@ -102,6 +108,93 @@ const (
 	NPartitions = 3
 )
 
+func printMessages(ctx context.Context, consumerID int, c *Consumer) {
+	ch, err := c.Consume(ctx)
+	if err != nil {
+		log.Fatalf("consumer %d failed to consume: %v", consumerID, err)
+	}
+
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			log.Printf("consumer/topic/partition:  %d/%s/%d", consumerID, msg.Topic, msg.Partition)
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func sleep(ctx context.Context, duration time.Duration) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(duration):
+	}
+}
+
+func rebalance(ctx context.Context, brokers string) {
+	p := NewProducer(brokers)
+
+	go func() {
+		for i := 0; i < N; i++ {
+			s := strconv.Itoa(i)
+			if err := p.Produce(ctx, "topic1", s, s); err != nil {
+				log.Fatalf("failed to produce: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	go func() {
+		for i := 0; i < N; i++ {
+			s := strconv.Itoa(i)
+			if err := p.Produce(ctx, "topic2", s, s); err != nil {
+				log.Fatalf("failed to produce: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second):
+			}
+		}
+	}()
+
+	log.Println("starting consumer 1")
+	c1 := NewConsumer(brokers, "topic1,topic2")
+	go printMessages(ctx, 1, c1)
+
+	sleep(ctx, time.Second*15)
+
+	log.Println("starting consumer 2")
+	c2 := NewConsumer(brokers, "topic1,topic2")
+	go printMessages(ctx, 2, c2)
+
+	sleep(ctx, time.Second*15)
+
+	log.Println("starting consumer 3")
+	c3 := NewConsumer(brokers, "topic1,topic2")
+	go printMessages(ctx, 3, c3)
+
+	sleep(ctx, time.Second*15)
+
+	log.Println("stopping consumer 1")
+	c1.Close()
+
+	sleep(ctx, time.Second*15)
+
+	log.Println("starting consumer 4")
+	c4 := NewConsumer(brokers, "topic1,topic2")
+	go printMessages(ctx, 4, c4)
+	sleep(ctx, time.Second*15)
+}
+
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
@@ -109,10 +202,16 @@ func main() {
 	var brokers string
 
 	flag.StringVar(&brokers, "brokers", "", `List of kafka brokers, e.g "127.0.0.1:58667,127.0.0.1:58661,127.0.0.1:58662"`)
+	runRebalance := flag.Bool("rebalance", false, "run rebalance scenario (consumers come and go)")
 	flag.Parse()
 
 	if brokers == "" {
 		flag.Usage()
+		return
+	}
+
+	if *runRebalance {
+		rebalance(ctx, brokers)
 		return
 	}
 
@@ -181,7 +280,7 @@ func main() {
 
 	wg.Wait()
 	log.Printf("Producing finished in %v", time.Since(start))
-	time.Sleep(time.Second * 15) // wait for messages still in flight
+	sleep(ctx, time.Second*15) // wait for messages still in flight
 	cancel()
 
 	sumT1 := 0
